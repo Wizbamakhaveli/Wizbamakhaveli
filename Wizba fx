@@ -1,0 +1,145 @@
+//+------------------------------------------------------------------+
+//|                        WiZBA MAKHAVELI 2.0.mq5                   |
+//|                            Scalping EA 2.O                       |
+//+------------------------------------------------------------------+
+#property strict
+
+// Input parameters
+input double TakeProfit = 100.0;         // Take profit in dollars
+input double StopLoss = 50.0;            // Stop loss in pips
+input double LotSize = 0.01;             // Lot size
+input int Slippage = 3;                  // Slippage
+input double MarginFactor = 0.5;         // Margin factor (e.g., 0.5 for half margin, 1 for full margin)
+input double EntryPriceOffset = 10;      // Entry price offset in pips
+input double ClosePriceOffset = 10;      // Close price offset in pips
+input int MovingAveragePeriod = 14;      // Period for Moving Average
+input int RSI_Period = 14;               // RSI Period
+input double RSI_Overbought = 70;        // RSI Overbought level
+input double RSI_Oversold = 30;          // RSI Oversold level
+input int NewsBufferMinutes = 30;        // Time before news to avoid trading
+input int HammerPatternPeriod = 1;       // Period to check for Hammer pattern
+input int MorningStarPatternPeriod = 3;  // Period to check for Morning Star pattern
+input int SupportResistanceBuffer = 20;  // Buffer for support/resistance breakout
+
+// Global variables
+double MovingAveragePrev;
+double MovingAverageCurrent;
+double RSI_Current;
+datetime LastTradeTime;
+double MarginRequirement;
+bool NewsEventDetected = false;
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+  {
+   MovingAveragePrev = iMA(NULL, 0, MovingAveragePeriod, 0, MODE_SMA, PRICE_CLOSE, 1);
+   MovingAverageCurrent = iMA(NULL, 0, MovingAveragePeriod, 0, MODE_SMA, PRICE_CLOSE, 0);
+   RSI_Current = iRSI(NULL, 0, RSI_Period, PRICE_CLOSE, 0);
+   LastTradeTime = 0;
+   MarginRequirement = AccountFreeMarginCheck(Symbol(), OP_BUY, LotSize) * MarginFactor;
+   return(INIT_SUCCEEDED);
+  }
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+  {
+  }
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+  {
+   // Check for news events
+   NewsEventDetected = false; // Reset news event detection
+   for (int i = 0; i < NewsCount(); i++)
+     {
+      datetime newsTime = NewsTime(i);
+      if (newsTime > TimeCurrent() && newsTime - TimeCurrent() <= NewsBufferMinutes * 60)
+        {
+         NewsEventDetected = true;
+         break;
+        }
+     }
+
+   // Avoid trading during news events
+   if (NewsEventDetected)
+     {
+      return;
+     }
+
+   // Calculate the current indicators
+   MovingAveragePrev = MovingAverageCurrent;
+   MovingAverageCurrent = iMA(NULL, 0, MovingAveragePeriod, 0, MODE_SMA, PRICE_CLOSE, 0);
+   RSI_Current = iRSI(NULL, 0, RSI_Period, PRICE_CLOSE, 0);
+
+   // Check support and resistance levels
+   double SupportLevel = iLow(NULL, 0, iLowest(NULL, 0, MODE_LOW, SupportResistanceBuffer, 0));
+   double ResistanceLevel = iHigh(NULL, 0, iHighest(NULL, 0, MODE_HIGH, SupportResistanceBuffer, 0));
+
+   // Check if there is an open position
+   if (PositionSelect(Symbol()))
+     {
+      double profit = PositionGetDouble(POSITION_PROFIT);
+      if (profit >= TakeProfit)
+        {
+         // Close position if profit target is reached
+         PositionClose(Symbol());
+        }
+     }
+   else
+     {
+      // Check for candlestick patterns and trading signals
+      if (IsHammer() || IsMorningStar()) // Check for Hammer or Morning Star pattern
+        {
+         // Check buy signal
+         if (MovingAverageCurrent > MovingAveragePrev && RSI_Current < RSI_Oversold && Ask > ResistanceLevel) // Buy signal
+           {
+            if (TimeCurrent() - LastTradeTime > 60 && AccountFreeMarginCheck(Symbol(), OP_BUY, LotSize) >= MarginRequirement)
+              {
+               double stopLossPrice = NormalizeDouble(Ask - StopLoss * _Point, _Digits);
+               double takeProfitPrice = NormalizeDouble(Ask + TakeProfit / LotSize / _Point, _Digits);
+               if (OrderSend(Symbol(), OP_BUY, LotSize, Ask, Slippage, stopLossPrice, takeProfitPrice, "WiZBA MAKHAVELI 2.0", 0, 0, clrGreen) > 0)
+                 {
+                  LastTradeTime = TimeCurrent();
+                 }
+              }
+           }
+         // Check sell signal
+         else if (MovingAverageCurrent < MovingAveragePrev && RSI_Current > RSI_Overbought && Bid < SupportLevel) // Sell signal
+           {
+            if (TimeCurrent() - LastTradeTime > 60 && AccountFreeMarginCheck(Symbol(), OP_SELL, LotSize) >= MarginRequirement)
+              {
+               double stopLossPrice = NormalizeDouble(Bid + StopLoss * _Point, _Digits);
+               double takeProfitPrice = NormalizeDouble(Bid - TakeProfit / LotSize / _Point, _Digits);
+               if (OrderSend(Symbol(), OP_SELL, LotSize, Bid, Slippage, stopLossPrice, takeProfitPrice, "WiZBA MAKHAVELI 2.0", 0, 0, clrRed) > 0)
+                 {
+                  LastTradeTime = TimeCurrent();
+                 }
+              }
+           }
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Check if the current bar is a Hammer pattern                    |
+//+------------------------------------------------------------------+
+bool IsHammer()
+  {
+   double bodySize = MathAbs(Close[0] - Open[0]);
+   double candleSize = High[0] - Low[0];
+   double lowerShadow = MathAbs(Low[0] - MathMin(Open[0], Close[0]));
+   return (bodySize < lowerShadow * 0.5 && lowerShadow > bodySize * 2);
+  }
+
+//+------------------------------------------------------------------+
+//| Check if the current bar is a Morning Star pattern              |
+//+------------------------------------------------------------------+
+bool IsMorningStar()
+  {
+   return (Close[2] < Open[2] && Close[1] < Open[1] && Open[0] > Close[0] && Close[1] < Open[2] && Open[1] < Close[2]);
+  }
+//+------------------------------------------------------------------+
